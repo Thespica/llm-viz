@@ -46,17 +46,27 @@ export class CodeSuiteManager {
     }
 
     private async loadSuite(suite: ICodeSuite) {
-        let basePath = (process.env.BASE_URL ?? '') + '/riscv/examples/';
-        let resp = await fetch(basePath + suite.fileName);
+        let elfFile: Uint8Array;
 
-        if (!resp.ok) {
-            let respBody = await resp.text();
-            suite.loadError = `Load failed: ${resp.status} ${resp.statusText} body:'${respBody.slice(0, 200)}'`;
-            this.subs.notify();
-            return;
+        if (typeof window === 'undefined') {
+            // Server-side rendering
+            const fs = require('fs');
+            const path = require('path');
+            let filePath = path.join(process.cwd(), 'public', 'riscv', 'examples', suite.fileName);
+            elfFile = new Uint8Array(fs.readFileSync(filePath));
+        } else {
+            // Client-side rendering
+            let basePath = (process.env.BASE_URL ?? '') + '/riscv/examples/';
+            let resp = await fetch(basePath + suite.fileName);
+
+            if (!resp.ok) {
+                let respBody = await resp.text();
+                suite.loadError = `Load failed: ${resp.status} ${resp.statusText} body:'${respBody.slice(0, 200)}'`;
+                this.subs.notify();
+                return;
+            }
+            elfFile = new Uint8Array(await resp.arrayBuffer());
         }
-
-        let elfFile = new Uint8Array(await resp.arrayBuffer());
 
         let header = readElfHeader(elfFile)!;
         let sections = listElfTextSections(elfFile, header);
