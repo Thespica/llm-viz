@@ -6,6 +6,7 @@ let withBundleAnalyzer = require("@next/bundle-analyzer")({
 
 const nextConfig = {
   output: 'export',
+  basePath: '/llm-viz',
   reactStrictMode: false, // Recommended for the `pages` directory, default in `app`.
   productionBrowserSourceMaps: true,
   experimental: {
