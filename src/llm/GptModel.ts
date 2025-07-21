@@ -71,6 +71,19 @@ export function setModelInputData(renderState: IRenderState, gptModel: IGpuGptMo
     writeToBufferTex(gl, inputTokens, buf);
 }
 
+/**
+ * 运行完整的GPT模型前向传播并验证结果
+ * Runs the complete GPT model forward pass and validates results
+ * 
+ * This function orchestrates the entire model execution pipeline:
+ * 1. 输入处理和嵌入 / Input processing and embedding
+ * 2. 多层transformer块处理 / Multi-layer transformer block processing  
+ * 3. 最终输出和softmax / Final output and softmax
+ * 4. 结果验证（如果提供验证数据）/ Result validation (if validation data provided)
+ * 
+ * GPU execution flow:
+ * Input tokens → Embeddings → Transformer blocks → Layer norm → Language model head → Softmax → Probabilities
+ */
 export function runModel(renderState: IRenderState, gptModel: IGpuGptModel, validationData?: ITensorSet) {
     let { ctx: { gl }, quadVao } = renderState;
     let {
@@ -97,12 +110,14 @@ export function runModel(renderState: IRenderState, gptModel: IGpuGptModel, vali
     gl.disable(gl.BLEND);
     gl.bindVertexArray(quadVao);
 
+    // 如果提供验证数据，使用验证输入 / If validation data provided, use validation input
     if (validationData) {
         let tIdx = validationData.idx; // (B, T)
         gptModel.inputBuf = tIdx.buffer;
         writeToBufferTex(gl, inputTokens, tIdx.buffer);
     }
 
+    // 1. 嵌入阶段：将token ID转换为向量表示 / Embedding phase: convert token IDs to vector representations
     runRenderPhase(gl, vocabEmbed.phase);
     runRenderPhase(gl, posEmbed.phase);
     runRenderPhase(gl, add.addPhase);
@@ -110,12 +125,15 @@ export function runModel(renderState: IRenderState, gptModel: IGpuGptModel, vali
     // gl.flush();
     validate('x', add.addPhase);
 
+    // 2. Transformer块处理：注意力和MLP层 / Transformer block processing: attention and MLP layers
     for (let blockId = 0; blockId < blocks.length; blockId++) {
         let { ln_1, attn, ln_2, mlp } = blocks[blockId];
 
         gl.flush();
+        // 层归一化 / Layer normalization
         runRenderPhase(gl, ln_1.aggPhase);
         runRenderPhase(gl, ln_1.applyPhase);
+        // 自注意力机制 / Self-attention mechanism
         runRenderPhase(gl, attn.qkvPhase);
         runRenderPhase(gl, attn.selfAttendPhase);
         runRenderPhase(gl, attn.attnMatrixAggPhase);
@@ -124,8 +142,10 @@ export function runModel(renderState: IRenderState, gptModel: IGpuGptModel, vali
         runRenderPhase(gl, attn.proj.linearPhase);
         gl.flush();
         runRenderPhase(gl, attn.add.addPhase);
+        // 第二层归一化 / Second layer normalization
         runRenderPhase(gl, ln_2.aggPhase);
         runRenderPhase(gl, ln_2.applyPhase);
+        // MLP前馈网络 / MLP feed-forward network
         runRenderPhase(gl, mlp.fcLayer.linearPhase);
         runRenderPhase(gl, mlp.geluPhase);
         runRenderPhase(gl, mlp.projLayer.linearPhase);
@@ -135,12 +155,14 @@ export function runModel(renderState: IRenderState, gptModel: IGpuGptModel, vali
         validate(`block${blockId}`, mlp.addLayer.addPhase);
     }
 
+    // 3. 最终处理：层归一化 → 语言模型头 → softmax / Final processing: layer norm → language model head → softmax
     runRenderPhase(gl, ln_f.aggPhase);
     runRenderPhase(gl, ln_f.applyPhase);
     runRenderPhase(gl, lm_head.linearPhase);
 
     gl.flush();
 
+    // 4. Softmax计算最终概率分布 / Softmax computes final probability distribution
     runRenderPhase(gl, softmaxFinal.aggPhase);
     runRenderPhase(gl, softmaxFinal.softmaxPhase);
 
@@ -178,6 +200,7 @@ export function runModel(renderState: IRenderState, gptModel: IGpuGptModel, vali
         }, 200);
     }
 
+    // 5. 设置同步对象以便异步读取结果 / Set up sync object for asynchronous result reading
     if (!validationData) {
         gptModel.readbackSync = createSyncObject(renderState);
         gl.flush();
@@ -196,6 +219,13 @@ export function loopModelOutputToInput(renderState: IRenderState, model: IGpuGpt
     model.inputLen++;
 }
 
+/**
+ * 检查GPU计算是否完成，如果完成则读取模型结果
+ * Checks if GPU computation is complete, and if so, reads the model results back to CPU
+ * 
+ * This function uses WebGL sync objects to determine when GPU computation has finished.
+ * Once ready, it calls readModelResultsBack() to transfer the final probabilities from GPU memory.
+ */
 export function readModelResultsBackWhenReady(model: IGpuGptModel) {
     if (model.readbackSync && model.readbackSync.isReady) {
         console.log('sync is ready after', model.readbackSync.elapsedMs.toFixed(1), 'ms');
@@ -204,26 +234,46 @@ export function readModelResultsBackWhenReady(model: IGpuGptModel) {
     }
 }
 
+/**
+ * 从GPU读取模型的最终输出结果并进行处理
+ * Reads the final model output results from GPU and processes them for display
+ * 
+ * This is the core function that extracts model predictions and makes them available for visualization:
+ * 
+ * 1. 读取GPU内存中的softmax概率结果 / Reads softmax probabilities from GPU memory
+ * 2. 为每个时间步排序词汇表概率 / Sorts vocabulary probabilities for each time step  
+ * 3. 存储排序后的结果用于可视化 / Stores sorted results for visualization
+ * 
+ * Data flow:
+ * GPU softmax output → resultBuf (raw probabilities) → sortedBuf (ranked predictions)
+ */
 export function readModelResultsBack(model: IGpuGptModel) {
 
     let { gl, shape: { B, T, C, vocabSize } } = model;
     let size = B * T * vocabSize;
 
+    // 1. 分配或重用结果缓冲区 / Allocate or reuse result buffer
     if (!model.resultBuf || model.resultBuf.length !== size) {
         model.resultBuf = new Float32Array(size);
     }
 
+    // 2. 从GPU的softmax阶段读取原始概率数据 / Read raw probability data from GPU's softmax phase
     readFromRenderPhase(gl, model.softmaxFinal.softmaxPhase, 0, model.resultBuf);
 
+    // 3. 为每个时间步创建排序的预测结果 / Create sorted predictions for each time step
     let sortedBuf = new Float32Array(T * vocabSize * 2);
     for (let t = 0; t < T; t++) {
+        // 提取当前时间步的词汇表概率 / Extract vocabulary probabilities for current time step
         let options = [...model.resultBuf.slice(t * vocabSize, (t + 1) * vocabSize)].map((v, i) => ({ v, i }));
+        // 按概率降序排序 / Sort by probability in descending order
         options.sort((a, b) => b.v - a.v);
+        // 存储排序结果：[词汇ID, 概率] 对 / Store sorted results as [vocab_id, probability] pairs
         for (let i = 0; i < options.length; i++) {
             sortedBuf[(t * vocabSize + i) * 2 + 0] = options[i].i;
             sortedBuf[(t * vocabSize + i) * 2 + 1] = options[i].v;
         }
     }
+    // 4. 保存排序后的结果供可视化系统使用 / Save sorted results for visualization system
     model.sortedBuf = sortedBuf;
 }
 
@@ -297,9 +347,13 @@ export interface IMlpLayerLink {
     output: IBufferTex;
 }
 
+/**
+ * GPU-based GPT模型接口，包含模型结果数据
+ * GPU-based GPT model interface, containing model result data
+ */
 export interface IGptModelLink {
     gl: WebGL2RenderingContext;
-    inputBuf: Float32Array;
+    inputBuf: Float32Array;                  // 输入token缓冲区 / Input token buffer
     inputTokens: IBufferTex;
     vocabEmbed: IEmbedLayerLink;
     posEmbed: IEmbedLayerLink;
@@ -310,9 +364,9 @@ export interface IGptModelLink {
     softmaxFinal: ISoftmaxLayerLink;
     shape: IModelShape;
     output: IBufferTex;
-    resultBuf: Float32Array | null;
-    sortedBuf: Float32Array | null;
-    inputLen: number;
+    resultBuf: Float32Array | null;          // 模型原始输出结果 / Raw model output results
+    sortedBuf: Float32Array | null;          // 排序后的预测结果 / Sorted prediction results  
+    inputLen: number;                        // 当前输入序列长度 / Current input sequence length
 }
 
 export interface IGpuGptModel extends IGptModelLink {
@@ -325,7 +379,7 @@ export interface IGpuGptModel extends IGptModelLink {
     blocks: IGpuGptBlockLayer[];
 
     copyOutputToInput: { copyPhase: IRenderPhase };
-    readbackSync: ISyncObject | null;
+    readbackSync: ISyncObject | null;        // GPU同步对象，用于异步结果读取 / GPU sync object for async result reading
 }
 
 export function createGptModel(shaderManager: IShaderManager, model: ITensorSet, B: number): IGpuGptModel {
