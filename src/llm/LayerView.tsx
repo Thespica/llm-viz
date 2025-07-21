@@ -21,9 +21,17 @@ import { KeyboardManagerContext, KeyboardOrder, useGlobalKeyboard } from '@/src/
 import { Resizer } from '../utils/Resizer';
 import { ModelSelectorToolbar } from './components/ModelSelectorToolbar';
 
+/**
+ * 从服务器获取张量数据并转换为可用格式
+ * Fetches tensor data from server and converts it to usable format
+ * 
+ * This function loads the pre-trained model weights and intermediate computation data
+ * used for visualization and validation.
+ */
 async function fetchTensorData(url: string): Promise<ITensorSet> {
     let resp = await fetch(url);
     let data = await resp.json();
+    // 将JSON数据转换为Float32数组张量 / Convert JSON data to Float32Array tensors
     for (let k in data) {
         if (data[k].shape) {
             data[k] = TensorF32.fromJson(data[k]);
@@ -128,11 +136,14 @@ export function LayerView() {
     useEffect(() => {
         let stale = false;
         async function getData() {
-            let dataP = fetchTensorData('gpt-nano-sort-t0-partials.json');
-            let modelP = fetchTensorData('gpt-nano-sort-model.json');
-            let nativeBindingsP = loadNativeBindings();
+            // 并行加载模型数据、权重和WebAssembly绑定
+            // Load model data, weights, and WebAssembly bindings in parallel
+            let dataP = fetchTensorData('gpt-nano-sort-t0-partials.json'); // 部分计算结果用于验证 / Partial computation results for validation
+            let modelP = fetchTensorData('gpt-nano-sort-model.json'); // 模型权重和配置 / Model weights and configuration
+            let nativeBindingsP = loadNativeBindings(); // WebAssembly计算后端 / WebAssembly computation backend
             let [data, model, native] = await Promise.all([dataP, modelP, nativeBindingsP]);
             if (stale) return;
+            // 设置完整的数据和模型对象供可视化使用 / Set up complete data and model object for visualization
             setDataAndModel({ data, model, native });
         }
 
@@ -252,10 +263,16 @@ class CanvasRender {
     setData(data: ICanvasData) {
         this.canvasData = data;
 
+        // 当数据和模型可用时，初始化GPU和WebAssembly模型
+        // When data and model are available, initialize GPU and WebAssembly models
         if (data.dataAndModel && !this.progState.gptGpuModel && this.progState.render) {
+            // 1. 创建GPU版本的GPT模型用于可视化 / Create GPU version of GPT model for visualization
             this.progState.gptGpuModel = initModel(this.renderState, data.dataAndModel, 1);
+            // 2. 设置WebAssembly原生函数绑定 / Set up WebAssembly native function bindings
             this.progState.native = data.dataAndModel.native;
+            // 3. 构建WebAssembly模型用于高性能计算 / Build WebAssembly model for high-performance computation
             this.progState.wasmGptModel = constructModel(data.dataAndModel.model, data.dataAndModel.model.config, data.dataAndModel.native);
+            // 4. 创建JavaScript GPU模型用于交互计算 / Create JavaScript GPU model for interactive computation
             this.progState.jsGptModel = createGpuModelForWasm(this.renderState.gl, data.dataAndModel.model.config);
             // initWebGpu();
             // setModelInputData(this.renderState, this.progState.gptGpuModel, this.random);

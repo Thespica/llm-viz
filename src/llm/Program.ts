@@ -62,16 +62,20 @@ export interface IMouseState {
     mousePos: Vec3;
 }
 
+/**
+ * 显示状态接口，控制可视化的外观和数据展示
+ * Display state interface, controlling visualization appearance and data display
+ */
 export interface IDisplayState {
-    tokenColors: IColorMix | null;
-    tokenIdxColors: IColorMix | null;
-    tokenOutputColors: IColorMix | null;
-    tokenIdxModelOpacity?: number[];
-    topOutputOpacity?: number;
-    lines: string[];
-    hoverTarget: IHoverTarget | null;
-    blkIdxHover: number[] | null;
-    dimHover: DimStyle | null;
+    tokenColors: IColorMix | null;           // Token颜色编码 / Token color encoding
+    tokenIdxColors: IColorMix | null;        // Token索引颜色 / Token index colors
+    tokenOutputColors: IColorMix | null;     // Token输出颜色 / Token output colors
+    tokenIdxModelOpacity?: number[];         // 模型透明度控制 / Model opacity control
+    topOutputOpacity?: number;               // 顶层输出透明度 / Top output opacity
+    lines: string[];                         // 调试和状态信息行 / Debug and status info lines
+    hoverTarget: IHoverTarget | null;        // 当前悬停目标 / Current hover target
+    blkIdxHover: number[] | null;           // 悬停的块索引 / Hovered block indices
+    dimHover: DimStyle | null;              // 维度悬停样式 / Dimension hover style
 }
 
 export interface IHoverTarget {
@@ -229,21 +233,25 @@ export function runProgram(view: IRenderView, state: IProgramState) {
 
     resetRenderBuffers(state.render);
     state.render.sharedRender.activePhase = RenderPhase.Opaque;
+    // 重置显示状态，准备新的渲染帧 / Reset display state for new render frame
     state.display.lines = [];
     state.display.hoverTarget = null;
     state.display.tokenColors = null;
     state.display.tokenIdxColors = null;
 
+    // 同步WebAssembly和JavaScript GPU模型数据 / Sync WebAssembly and JavaScript GPU model data
     if (state.wasmGptModel && state.jsGptModel) {
         syncWasmDataWithJsAndGpu(state.wasmGptModel, state.jsGptModel);
     }
 
+    // 执行模型推理步骤（如果请求）/ Execute model inference step (if requested)
     if (state.stepModel && state.wasmGptModel && state.jsGptModel) {
         state.stepModel = false;
         stepWasmModel(state.wasmGptModel, state.jsGptModel);
     }
 
-    // generate the base model, incorporating the gpu-side model if available
+    // 生成基础模型布局，整合GPU端模型（如果可用）
+    // Generate base model layout, incorporating GPU-side model if available
     state.layout = genGptModelLayout(state.shape, state.jsGptModel);
 
     // @TODO: handle different models in the same scene.
@@ -264,13 +272,15 @@ export function runProgram(view: IRenderView, state: IProgramState) {
 
     state.render.renderTiming = false; // state.pageLayout.isDesktop;
 
-    // will modify layout; view; render a few things.
+    // 运行交互式演示，修改布局和视图以显示模型结果
+    // Run interactive walkthrough, modifying layout and view to show model results
     if (state.inWalkthrough) {
         runWalkthrough(state, view);
     }
 
     updateCamera(state, view);
 
+    // 绘制模型结果和状态信息 / Draw model results and status information
     drawBlockInfo(state);
     // these will get modified by the walkthrough (stored where?)
     drawAllArrows(state.render, state.layout);
@@ -289,6 +299,7 @@ export function runProgram(view: IRenderView, state: IProgramState) {
     state.render.sharedRender.activePhase = RenderPhase.Opaque;
     drawBlockLabels(state.render, state.layout);
 
+    // 在屏幕右上角显示调试信息和模型状态 / Display debug info and model status in top-right corner
     let lineNo = 1;
     let tw = state.render.size.x;
     state.render.sharedRender.activePhase = RenderPhase.Overlay2D;
