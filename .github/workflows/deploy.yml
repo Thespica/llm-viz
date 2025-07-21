@@ -1,5 +1,5 @@
 
-name: Deploy to GitHub Pages
+name: Deploy LLM Visualization to GitHub Pages
 
 on:
   push:
@@ -11,23 +11,39 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: recursive
 
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '18'
+          cache: 'yarn'
 
       - name: Install dependencies
-        run: yarn install
+        run: yarn install --frozen-lockfile
 
-      - name: Build
+      - name: Verify model files are present
+        run: |
+          echo "Checking for required model files..."
+          ls -la public/gpt-nano-sort-model.json
+          ls -la public/gpt-nano-sort-t0-partials.json
+          ls -la public/native.wasm
+          echo "Model files verified!"
+
+      - name: Build LLM Visualization
         run: yarn build
+
+      - name: Verify build output
+        run: |
+          echo "Checking build output..."
+          ls -la out/
+          echo "Build verification complete!"
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./out
+          cname: false
